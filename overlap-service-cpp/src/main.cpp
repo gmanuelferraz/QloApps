@@ -47,8 +47,31 @@ int main() {
     });
 
     svr.Post("/v1/inventory-audits/overlaps", [](const httplib::Request& req, httplib::Response& res) {
+        auto sendProblemResponse = [&res](int status, const std::string& type, const std::string& title, const std::string& detail) {
+            json error;
+            error["type"] = type;
+            error["title"] = title;
+            error["status"] = status;
+            error["detail"] = detail;
+            error["instance"] = "/v1/inventory-audits/overlaps";
+
+            res.status = status;
+            res.set_content(error.dump(), "application/problem+json");
+        };
+
         try {
             auto body = json::parse(req.body);
+
+            if (!body.contains("reservations") || !body["reservations"].is_array()) {
+                sendProblemResponse(400, "https://hotel.local/errors/invalid-audit-batch", "Lote de Auditoria Inválido", "JSON de reservas inválido ou malformado.");
+                return;
+            }
+
+            if (body["reservations"].size() > 200) {
+                sendProblemResponse(400, "https://hotel.local/errors/invalid-audit-batch", "Lote de Auditoria Inválido", "O lote de reservas excede o limite máximo permitido de 200 registros.");
+                return;
+            }
+
             std::unordered_map<std::string, std::vector<Reservation>> roomBuckets;
             for (const auto& item : body["reservations"]) {
                 roomBuckets[item["room_id"]].push_back({
@@ -101,8 +124,7 @@ int main() {
             res.status = 200;
             res.set_content(response.dump(), "application/json");
         } catch (const std::exception& e) {
-            res.status = 400;
-            res.set_content("{\"error\":\"MALFORMED_JSON\"}", "application/json");
+            sendProblemResponse(400, "https://hotel.local/errors/invalid-audit-batch", "Lote de Auditoria Inválido", "JSON de reservas inválido ou malformado.");
         }
     });
 
