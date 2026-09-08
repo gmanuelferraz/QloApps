@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <algorithm>
 #include <string>
+#include <cstdio>
 #include "../include/httplib.h"
 #include "../include/json.hpp"
 
@@ -16,6 +17,27 @@ struct Reservation {
     std::string checkOut;
     std::string guestName;
 };
+
+// Converts ISO date "YYYY-MM-DD" to days since civil epoch (1970-01-01)
+static int parseDateToDays(const std::string& dateStr) {
+    int y = 0, m = 0, d = 0;
+    if (std::sscanf(dateStr.c_str(), "%4d-%2d-%2d", &y, &m, &d) == 3) {
+        y -= m <= 2;
+        const int era = (y >= 0 ? y : y - 399) / 400;
+        const unsigned yoe = static_cast<unsigned>(y - era * 400);
+        const unsigned doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+        const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        return era * 146097 + static_cast<int>(doe) - 719468;
+    }
+    return 0;
+}
+
+static int calculateOverlapNights(const std::string& start, const std::string& end) {
+    int daysStart = parseDateToDays(start);
+    int daysEnd = parseDateToDays(end);
+    int diff = daysEnd - daysStart;
+    return diff > 0 ? diff : 0;
+}
 
 int main() {
     httplib::Server svr;
@@ -51,13 +73,17 @@ int main() {
 
                     if (r2.checkIn < r1.checkOut) {
                         json c;
+                        std::string overlapStart = r2.checkIn;
+                        std::string overlapEnd = (r1.checkOut < r2.checkOut) ? r1.checkOut : r2.checkOut;
+                        int overlapNights = calculateOverlapNights(overlapStart, overlapEnd);
+
                         c["room_id"] = pair.first;
                         c["reservation_a_id"] = r1.id;
                         c["reservation_b_id"] = r2.id;
-                        c["overlap_start"] = r2.checkIn;
-                        c["overlap_end"] = (r1.checkOut < r2.checkOut) ? r1.checkOut : r2.checkOut;
-                        c["overlap_nights"] = 2;
-                        c["severity"] = "MEDIUM";
+                        c["overlap_start"] = overlapStart;
+                        c["overlap_end"] = overlapEnd;
+                        c["overlap_nights"] = overlapNights;
+                        c["severity"] = (overlapNights >= 3) ? "HIGH" : "MEDIUM";
                         c["message"] = "Colisao de ocupacao detectada no quarto " + pair.first;
                         conflicts.push_back(c);
                     }
