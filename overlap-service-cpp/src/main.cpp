@@ -1,43 +1,12 @@
 // overlap-service-cpp/src/main.cpp
 #include <iostream>
 #include <vector>
-#include <unordered_map>
-#include <algorithm>
 #include <string>
-#include <cstdio>
 #include "../include/httplib.h"
 #include "../include/json.hpp"
+#include "../include/OverlapDetector.hpp"
 
 using json = nlohmann::json;
-
-struct Reservation {
-    std::string id;
-    std::string roomId;
-    std::string checkIn;
-    std::string checkOut;
-    std::string guestName;
-};
-
-// Converts ISO date "YYYY-MM-DD" to days since civil epoch (1970-01-01)
-static int parseDateToDays(const std::string& dateStr) {
-    int y = 0, m = 0, d = 0;
-    if (std::sscanf(dateStr.c_str(), "%4d-%2d-%2d", &y, &m, &d) == 3) {
-        y -= m <= 2;
-        const int era = (y >= 0 ? y : y - 399) / 400;
-        const unsigned yoe = static_cast<unsigned>(y - era * 400);
-        const unsigned doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
-        const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        return era * 146097 + static_cast<int>(doe) - 719468;
-    }
-    return 0;
-}
-
-static int calculateOverlapNights(const std::string& start, const std::string& end) {
-    int daysStart = parseDateToDays(start);
-    int daysEnd = parseDateToDays(end);
-    int diff = daysEnd - daysStart;
-    return diff > 0 ? diff : 0;
-}
 
 int main() {
     httplib::Server svr;
@@ -72,53 +41,68 @@ int main() {
                 return;
             }
 
-            std::unordered_map<std::string, std::vector<Reservation>> roomBuckets;
+            std::vector<Reservation> reservations;
+            reservations.reserve(body["reservations"].size());
+
             for (const auto& item : body["reservations"]) {
-                roomBuckets[item["room_id"]].push_back({
-                    item["reservation_id"], item["room_id"], item["check_in"], item["check_out"], item["guest_name"]
+                if (!item.is_object() ||
+                    !item.contains("reservation_id") || !item.contains("room_id") ||
+                    !item.contains("check_in") || !item.contains("check_out") ||
+                    !item.contains("guest_name") ||
+                    !item["reservation_id"].is_string() || !item["room_id"].is_string() ||
+                    !item["check_in"].is_string() || !item["check_out"].is_string() ||
+                    !item["guest_name"].is_string()) {
+                    sendProblemResponse(400, "https://hotel.local/errors/invalid-audit-batch", "Lote de Auditoria Inválido", "Campos obrigatórios ausentes ou com tipos inválidos em uma ou mais reservas.");
+                    return;
+                }
+
+                std::string checkIn = item["check_in"].get<std::string>();
+                std::string checkOut = item["check_out"].get<std::string>();
+
+                auto startDays = OverlapDetector::parseDateToDays(checkIn);
+                auto endDays = OverlapDetector::parseDateToDays(checkOut);
+
+                if (!startDays.has_value() || !endDays.has_value()) {
+                    sendProblemResponse(400, "https://hotel.local/errors/invalid-audit-batch", "Lote de Auditoria Inválido", "Data de check-in ou check-out com formato ou valor inválido (esperado: YYYY-MM-DD).");
+                    return;
+                }
+
+                if (!OverlapDetector::isValidReservationDates(checkIn, checkOut)) {
+                    sendProblemResponse(400, "https://hotel.local/errors/invalid-audit-batch", "Lote de Auditoria Inválido", "A data de check-out deve ser estritamente posterior à data de check-in.");
+                    return;
+                }
+
+                reservations.push_back({
+                    item["reservation_id"].get<std::string>(),
+                    item["room_id"].get<std::string>(),
+                    checkIn,
+                    checkOut,
+                    item["guest_name"].get<std::string>()
                 });
             }
 
+            AuditResult auditResult = OverlapDetector::detectOverlaps(reservations);
+
             json conflicts = json::array();
-            int totalAudited = 0;
-
-            for (auto& pair : roomBuckets) {
-                auto& list = pair.second;
-                totalAudited += list.size();
-                
-                std::sort(list.begin(), list.end(), [](const Reservation& a, const Reservation& b) {
-                    return a.checkIn < b.checkIn;
-                });
-
-                for (size_t i = 0; i + 1 < list.size(); ++i) {
-                    const auto& r1 = list[i];
-                    const auto& r2 = list[i + 1];
-
-                    if (r2.checkIn < r1.checkOut) {
-                        json c;
-                        std::string overlapStart = r2.checkIn;
-                        std::string overlapEnd = (r1.checkOut < r2.checkOut) ? r1.checkOut : r2.checkOut;
-                        int overlapNights = calculateOverlapNights(overlapStart, overlapEnd);
-
-                        c["room_id"] = pair.first;
-                        c["reservation_a_id"] = r1.id;
-                        c["reservation_b_id"] = r2.id;
-                        c["overlap_start"] = overlapStart;
-                        c["overlap_end"] = overlapEnd;
-                        c["overlap_nights"] = overlapNights;
-                        c["severity"] = (overlapNights >= 3) ? "HIGH" : "MEDIUM";
-                        c["message"] = "Colisao de ocupacao detectada no quarto " + pair.first;
-                        conflicts.push_back(c);
-                    }
-                }
+            for (const auto& c : auditResult.conflicts) {
+                json item;
+                item["room_id"] = c.roomId;
+                item["reservation_a_id"] = c.reservationAId;
+                item["reservation_b_id"] = c.reservationBId;
+                item["overlap_start"] = c.overlapStart;
+                item["overlap_end"] = c.overlapEnd;
+                item["overlap_nights"] = c.overlapNights;
+                item["severity"] = c.severity;
+                item["message"] = c.message;
+                conflicts.push_back(item);
             }
 
             json response;
             response["correlation_id"] = req.has_header("X-Correlation-ID") ? req.get_header_value("X-Correlation-ID") : "corr-demo";
             response["audit_batch_id"] = body.value("audit_batch_id", "batch-default");
-            response["total_reservations_audited"] = totalAudited;
-            response["total_rooms_audited"] = roomBuckets.size();
-            response["total_conflicts_found"] = conflicts.size();
+            response["total_reservations_audited"] = auditResult.totalReservationsAudited;
+            response["total_rooms_audited"] = auditResult.totalRoomsAudited;
+            response["total_conflicts_found"] = auditResult.totalConflictsFound;
             response["conflicts"] = conflicts;
 
             res.status = 200;
