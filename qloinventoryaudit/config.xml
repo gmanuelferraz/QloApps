@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<module>
+	<name>qloinventoryaudit</name>
+	<displayName><![CDATA[Auditor de Sobreposi&ccedil;&atilde;o de Invent&aacute;rio]]></displayName>
+	<version><![CDATA[1.0.0]]></version>
+	<description><![CDATA[Detec&ccedil;&atilde;o de conflitos e duplas aloca&ccedil;&otilde;es de quartos f&iacute;sicos.]]></description>
+	<author><![CDATA[QloApps Engineering]]></author>
+	<tab><![CDATA[hotel_reservation]]></tab>
+	<confirmUninstall><![CDATA[]]></confirmUninstall>
+	<is_configurable>0</is_configurable>
+	<need_instance>0</need_instance>
+	<limited_countries></limited_countries>
+</module>
