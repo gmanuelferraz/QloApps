@@ -282,12 +282,10 @@ class AdminInventoryAuditController extends ModuleAdminController
         $limitCheck = (int) self::MAX_BATCH_RESERVATIONS + 1;
 
         $sql = 'SELECT hbd.`id` as id_booking, hbd.`id_order`,
-                       COALESCE(NULLIF(hbd.`room_num`, ""), hri.`room_num`, CAST(hbd.`id_room` AS CHAR)) as room_num,
                        hbd.`id_room`,
                        DATE(hbd.`date_from`) as check_in, DATE(hbd.`date_to`) as check_out,
                        CONCAT(c.`firstname`, " ", c.`lastname`) as guest_name
                 FROM `' . _DB_PREFIX_ . 'htl_booking_detail` hbd
-                LEFT JOIN `' . _DB_PREFIX_ . 'htl_room_information` hri ON (hri.`id` = hbd.`id_room`)
                 LEFT JOIN `' . _DB_PREFIX_ . 'customer` c ON (c.`id_customer` = hbd.`id_customer`)
                 WHERE (hbd.`is_refunded` = 0 OR hbd.`is_refunded` IS NULL)
                   AND (hbd.`is_cancelled` = 0 OR hbd.`is_cancelled` IS NULL)
@@ -327,7 +325,7 @@ class AdminInventoryAuditController extends ModuleAdminController
             foreach ($rows as $row) {
                 $reservations[] = [
                     'reservation_id' => 'RES-' . ($row['id_order'] ? $row['id_order'] . '-' : '') . $row['id_booking'],
-                    'room_id' => $row['room_num'] ? (string) $row['room_num'] : (string) $row['id_room'],
+                    'room_id' => (string) $row['id_room'],
                     'check_in' => $row['check_in'],
                     'check_out' => $row['check_out'],
                     'guest_name' => !empty(trim($row['guest_name'])) ? trim($row['guest_name']) : 'Hóspede #' . $row['id_booking']
