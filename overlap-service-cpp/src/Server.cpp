@@ -13,13 +13,13 @@ void setupServerRoutes(httplib::Server& svr) {
     });
 
     svr.Post("/v1/inventory-audits/overlaps", [](const httplib::Request& req, httplib::Response& res) {
-        auto sendProblemResponse = [&res](int status, const std::string& type, const std::string& title, const std::string& detail) {
+        auto sendProblemResponse = [&res, &req](int status, const std::string& type, const std::string& title, const std::string& detail) {
             json error;
             error["type"] = type;
             error["title"] = title;
             error["status"] = status;
             error["detail"] = detail;
-            error["instance"] = "/v1/inventory-audits/overlaps";
+            error["instance"] = req.path;
 
             res.status = status;
             res.set_content(error.dump(), "application/problem+json");
