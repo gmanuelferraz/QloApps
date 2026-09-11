@@ -122,7 +122,7 @@ class AdminInventoryAuditController extends ModuleAdminController
 
         // Ação: Carregar reservas ativas do banco de dados por período
         if (Tools::isSubmit('submitLoadFromDb')) {
-            $loadedJson = $this->loadReservationsFromDb($dateFrom, $dateTo);
+            $loadedJson = $this->loadReservationsFromDb($dateFrom, $dateTo, $errorMessage);
             if ($loadedJson !== false) {
                 $rawJson = $loadedJson;
                 $this->confirmations[] = $this->l('Lote de reservas carregado com sucesso do banco de dados.');
@@ -258,17 +258,28 @@ class AdminInventoryAuditController extends ModuleAdminController
 
     /**
      * Consulta reservas ativas no banco de dados do QloApps e gera um lote JSON.
+     * Enforça o limite da RN-005: se o período selecionado exceder MAX_BATCH_RESERVATIONS,
+     * recusa o carregamento para evitar auditoria incompleta e falsos negativos de sobreposição.
      *
      * @param string $dateFrom Data inicial (YYYY-MM-DD)
      * @param string $dateTo Data final (YYYY-MM-DD)
+     * @param string|null &$errorMessage Mensagem de erro retornada por referência
      * @return string|false JSON formatado ou falso em caso de erro
      */
-    protected function loadReservationsFromDb($dateFrom, $dateTo)
+    protected function loadReservationsFromDb($dateFrom, $dateTo, &$errorMessage = null)
     {
         if (!Validate::isDate($dateFrom) || !Validate::isDate($dateTo)) {
-            $this->errors[] = $this->l('Formato de período inválido para consulta ao banco de dados.');
+            $errorMessage = $this->l('Formato de período inválido para consulta ao banco de dados.');
             return false;
         }
+
+        if (strtotime($dateFrom) > strtotime($dateTo)) {
+            $errorMessage = $this->l('A data inicial não pode ser posterior à data final.');
+            return false;
+        }
+
+        // Busca 1 registro a mais que o limite para detectar se o lote foi extrapolado sem truncamento cego
+        $limitCheck = (int) self::MAX_BATCH_RESERVATIONS + 1;
 
         $sql = 'SELECT hbd.`id` as id_booking, hbd.`id_order`,
                        COALESCE(NULLIF(hbd.`room_num`, ""), hri.`room_num`, CAST(hbd.`id_room` AS CHAR)) as room_num,
@@ -283,12 +294,32 @@ class AdminInventoryAuditController extends ModuleAdminController
                   AND hbd.`date_from` >= "' . pSQL($dateFrom) . ' 00:00:00"
                   AND hbd.`date_to` <= "' . pSQL($dateTo) . ' 23:59:59"
                 ORDER BY hbd.`date_from` ASC
-                LIMIT ' . (int) self::MAX_BATCH_RESERVATIONS;
+                LIMIT ' . $limitCheck;
 
         try {
             $rows = Db::getInstance()->executeS($sql);
             if (!is_array($rows) || empty($rows)) {
-                $this->errors[] = sprintf($this->l('Nenhuma reserva ativa encontrada entre %s e %s.'), $dateFrom, $dateTo);
+                $errorMessage = sprintf($this->l('Nenhuma reserva ativa encontrada entre %s e %s.'), $dateFrom, $dateTo);
+                return false;
+            }
+
+            // Se o período possuir mais reservas que o limite permitido por lote (RN-005), recusa para evitar falso negativo
+            if (count($rows) > self::MAX_BATCH_RESERVATIONS) {
+                $countSql = 'SELECT COUNT(*) FROM `' . _DB_PREFIX_ . 'htl_booking_detail` hbd
+                             WHERE (hbd.`is_refunded` = 0 OR hbd.`is_refunded` IS NULL)
+                               AND (hbd.`is_cancelled` = 0 OR hbd.`is_cancelled` IS NULL)
+                               AND hbd.`date_from` >= "' . pSQL($dateFrom) . ' 00:00:00"
+                               AND hbd.`date_to` <= "' . pSQL($dateTo) . ' 23:59:59"';
+                $totalFound = (int) Db::getInstance()->getValue($countSql);
+                if ($totalFound <= 0) {
+                    $totalFound = count($rows);
+                }
+
+                $errorMessage = sprintf(
+                    $this->l('O período selecionado contém %d reservas, excedendo o limite máximo permitido de %d registros por lote (RN-005). Por favor, reduza o intervalo de datas (ex: consulte semana a semana) para garantir uma auditoria íntegra e sem omissões.'),
+                    $totalFound,
+                    self::MAX_BATCH_RESERVATIONS
+                );
                 return false;
             }
 
@@ -308,7 +339,7 @@ class AdminInventoryAuditController extends ModuleAdminController
                 'reservations' => $reservations
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         } catch (Exception $e) {
-            $this->errors[] = sprintf($this->l('Erro ao consultar banco de dados: %s'), $e->getMessage());
+            $errorMessage = sprintf($this->l('Erro ao consultar banco de dados: %s'), $e->getMessage());
             return false;
         }
     }
