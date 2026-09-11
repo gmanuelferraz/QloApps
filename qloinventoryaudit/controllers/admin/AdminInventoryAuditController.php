@@ -48,7 +48,29 @@ class AdminInventoryAuditController extends ModuleAdminController
     }
 
     /**
-     * Exporta os resultados da auditoria em formato CSV.
+     * Sanitiza campos para prevenir CSV Formula Injection (CWE-1236)
+     * e garantir que apenas tipos escalares seguros sejam passados para fputcsv.
+     *
+     * @param mixed $value Valor a ser inserido na célula do CSV
+     * @return string
+     */
+    protected function sanitizeCsvField($value)
+    {
+        if (is_array($value) || is_object($value)) {
+            return '';
+        }
+
+        $str = trim((string) $value);
+        // Se o valor iniciar com caracteres executáveis por planilhas, neutraliza com apóstrofo
+        if (strlen($str) > 0 && in_array($str[0], ['=', '+', '-', '@', "\t", "\r"])) {
+            return "'" . $str;
+        }
+
+        return $str;
+    }
+
+    /**
+     * Exporta os resultados da auditoria em formato CSV com validação estrutural e sanitização contra CSV Injection.
      */
     protected function processExportCsv()
     {
@@ -58,6 +80,11 @@ class AdminInventoryAuditController extends ModuleAdminController
         if (!is_array($conflicts) || empty($conflicts)) {
             $this->errors[] = $this->l('Não há dados de conflitos disponíveis para exportação em CSV.');
             return;
+        }
+
+        // Teto de segurança defensivo contra exaustão de memória/processamento por payload adulterado
+        if (count($conflicts) > 500) {
+            $conflicts = array_slice($conflicts, 0, 500);
         }
 
         // Limpa buffers de saída anteriores para garantir que nenhum aviso/HTML seja emitido antes do CSV
@@ -91,15 +118,28 @@ class AdminInventoryAuditController extends ModuleAdminController
         ], ';', '"', "\\");
 
         foreach ($conflicts as $conflict) {
+            // Ignora itens malformados que não sejam arrays associativos
+            if (!is_array($conflict)) {
+                continue;
+            }
+
+            $severity = isset($conflict['severity']) && in_array($conflict['severity'], ['HIGH', 'MEDIUM', 'LOW'], true)
+                ? $conflict['severity']
+                : 'MEDIUM';
+
+            $nights = isset($conflict['overlap_nights']) && is_numeric($conflict['overlap_nights'])
+                ? (int) $conflict['overlap_nights']
+                : 0;
+
             fputcsv($output, [
-                isset($conflict['room_id']) ? $conflict['room_id'] : '',
-                isset($conflict['reservation_a_id']) ? $conflict['reservation_a_id'] : '',
-                isset($conflict['reservation_b_id']) ? $conflict['reservation_b_id'] : '',
-                isset($conflict['overlap_start']) ? $conflict['overlap_start'] : '',
-                isset($conflict['overlap_end']) ? $conflict['overlap_end'] : '',
-                isset($conflict['overlap_nights']) ? $conflict['overlap_nights'] : '',
-                isset($conflict['severity']) ? $conflict['severity'] : '',
-                isset($conflict['message']) ? $conflict['message'] : ''
+                $this->sanitizeCsvField(isset($conflict['room_id']) ? $conflict['room_id'] : ''),
+                $this->sanitizeCsvField(isset($conflict['reservation_a_id']) ? $conflict['reservation_a_id'] : ''),
+                $this->sanitizeCsvField(isset($conflict['reservation_b_id']) ? $conflict['reservation_b_id'] : ''),
+                $this->sanitizeCsvField(isset($conflict['overlap_start']) ? $conflict['overlap_start'] : ''),
+                $this->sanitizeCsvField(isset($conflict['overlap_end']) ? $conflict['overlap_end'] : ''),
+                $nights,
+                $severity,
+                $this->sanitizeCsvField(isset($conflict['message']) ? $conflict['message'] : '')
             ], ';', '"', "\\");
         }
 
