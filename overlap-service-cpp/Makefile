@@ -16,9 +16,9 @@ TARGET ?= overlap_service
 TEST_TARGET ?= test_overlaps
 
 # Third-party header-only dependencies
-HTTPLIB_URL ?= https://raw.githubusercontent.com/yhirose/cpp-httplib/refs/heads/master/httplib.h
-JSON_URL ?= https://raw.githubusercontent.com/nlohmann/json/refs/heads/develop/single_include/nlohmann/json.hpp
-DOCTEST_URL ?= https://raw.githubusercontent.com/doctest/doctest/refs/heads/master/doctest/doctest.h
+HTTPLIB_URL ?= https://raw.githubusercontent.com/yhirose/cpp-httplib/dc41dbd9548b4ab2077680ced2c03d4ce962cfa5/httplib.h
+JSON_URL ?= https://raw.githubusercontent.com/nlohmann/json/0452641c186bdd64c245cfe57a185dcbcb7a6d30/single_include/nlohmann/json.hpp
+DOCTEST_URL ?= https://raw.githubusercontent.com/doctest/doctest/d44d4f6e66232d716af82f00a063759e9d0e50d6/doctest/doctest.h
 
 HTTPLIB_H := $(INC_DIR)/httplib.h
 JSON_HPP := $(INC_DIR)/json.hpp
